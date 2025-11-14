@@ -112,59 +112,57 @@ function calculateNewNRR(team, newRunsFor, newOversFor, newRunsAgainst, newOvers
 // ============================================
 
 /**
- * Get target NRR threshold to reach desired position
- * Logic: After winning (+2 points), compare with teams at desired position with same points
+ * Calculate new standings after a match and check if yourTeam reaches desired position
+ * @returns {Object} { achievedPosition, standings, yourNRR, competitorNRRs }
  */
-function getTargetNRRForPosition(yourTeam, desiredPosition) {
-  const teamData = pointsTable[yourTeam];
-  const newPoints = teamData.points + 2; // Points after winning
-  
-  // Create sorted standings
+function calculateNewStandings(yourTeam, oppTeam, yourNewNRR, oppNewNRR) {
   const teams = Object.entries(pointsTable)
-    .map(([name, data]) => ({ name, ...data }))
+    .map(([name, data]) => {
+      let nrr = data.nrr;
+      let points = data.points;
+      
+      if (name === yourTeam) {
+        nrr = yourNewNRR;
+        points = data.points + 2; // Win gives +2 points
+      } else if (name === oppTeam) {
+        nrr = oppNewNRR;
+        // Opponent loses, points stay same
+      }
+      
+      return { name, points, nrr, ...data };
+    })
     .sort((a, b) => b.points !== a.points ? b.points - a.points : b.nrr - a.nrr);
   
-  // Display current standings
-  console.log("\nCurrent Points Table:");
-  teams.forEach((team, idx) => {
-    console.log(`${idx + 1}. ${team.name} - Points: ${team.points}, NRR: ${team.nrr.toFixed(3)}`);
-  });
-  
-  // Find teams with same points after winning
-  const teamsWithSamePoints = teams.filter(t => t.name !== yourTeam && t.points === newPoints);
-  
-  console.log(`\nAfter winning, ${yourTeam} will have ${newPoints} points.`);
-  if (teamsWithSamePoints.length > 0) {
-    console.log(`Teams with same points (${newPoints}):`);
-    teamsWithSamePoints.forEach(t => console.log(`  - ${t.name}: NRR = ${t.nrr.toFixed(3)}`));
-  }
-  
-  // Determine target NRR
-  const targetTeam = teams[desiredPosition - 1];
-  const targetNRR = targetTeam.points === newPoints 
-    ? targetTeam.nrr 
-    : Math.max(...teamsWithSamePoints.map(t => t.nrr));
-  
-  console.log(`\nTo reach position ${desiredPosition}, ${yourTeam} needs NRR > ${targetNRR.toFixed(3)} (${targetTeam.name}'s NRR)`);
-  return targetNRR;
+  const yourPosition = teams.findIndex(t => t.name === yourTeam) + 1;
+  return { achievedPosition: yourPosition, standings: teams };
 }
 
 /**
  * Solve batting first scenario - find runs to restrict opponent to
- * Uses binary search for efficiency: O(log n) instead of O(n)
+ * DYNAMIC NRR: Calculates NRR for both teams based on match performance
  */
-function solveBattingFirst(yourTeam, runsScored, matchOvers, targetNRR) {
-  const team = pointsTable[yourTeam];
+function solveBattingFirst(yourTeam, oppTeam, runsScored, matchOvers, desiredPosition) {
+  const yourTeamData = pointsTable[yourTeam];
+  const oppTeamData = pointsTable[oppTeam];
+  
   let left = 0;
   let right = runsScored - 1; // Must win
   let restrictMax = -1;
   
-  // Binary search for maximum runs opponent can score while still beating target NRR
+  // Binary search for maximum runs opponent can score while achieving desired position
   while (left <= right) {
     const mid = Math.floor((left + right) / 2);
-    const newNRR = calculateNewNRR(team, runsScored, matchOvers, mid, matchOvers);
     
-    if (newNRR > targetNRR) {
+    // Calculate YOUR team's new NRR after this match
+    const yourNewNRR = calculateNewNRR(yourTeamData, runsScored, matchOvers, mid, matchOvers);
+    
+    // Calculate OPPONENT's new NRR after losing this match
+    const oppNewNRR = calculateNewNRR(oppTeamData, mid, matchOvers, runsScored, matchOvers);
+    
+    // Check if you achieve desired position with these NRRs
+    const { achievedPosition } = calculateNewStandings(yourTeam, oppTeam, yourNewNRR, oppNewNRR);
+    
+    if (achievedPosition <= desiredPosition) {
       restrictMax = mid;
       left = mid + 1; // Try allowing more runs
     } else {
@@ -173,37 +171,57 @@ function solveBattingFirst(yourTeam, runsScored, matchOvers, targetNRR) {
   }
   
   if (restrictMax === -1) {
-    console.log("\n⚠️ Impossible to achieve target NRR with this score!");
+    console.log("\n⚠️ Impossible to achieve desired position with this score!");
     return null;
   }
   
   // Calculate NRR range
   const restrictMin = 0;
-  const nrrMax = calculateNewNRR(team, runsScored, matchOvers, restrictMin, matchOvers);
-  const nrrMin = calculateNewNRR(team, runsScored, matchOvers, restrictMax, matchOvers);
+  const nrrMax = calculateNewNRR(yourTeamData, runsScored, matchOvers, restrictMin, matchOvers);
+  const nrrMin = calculateNewNRR(yourTeamData, runsScored, matchOvers, restrictMax, matchOvers);
   
-  return { restrictMin, restrictMax, nrrMin, nrrMax };
+  // Also calculate opponent's NRR range for analysis
+  const oppNRRWhenYouGetMax = calculateNewNRR(oppTeamData, restrictMin, matchOvers, runsScored, matchOvers);
+  const oppNRRWhenYouGetMin = calculateNewNRR(oppTeamData, restrictMax, matchOvers, runsScored, matchOvers);
+  
+  return { 
+    restrictMin, 
+    restrictMax, 
+    nrrMin, 
+    nrrMax,
+    oppNRRMax: oppNRRWhenYouGetMax,
+    oppNRRMin: oppNRRWhenYouGetMin
+  };
 }
 
 /**
  * Solve bowling first scenario - find overs to chase in
- * Uses binary search with floating point precision
+ * DYNAMIC NRR: Calculates NRR for both teams based on match performance
  */
-function solveBowlingFirst(yourTeam, runsToChase, matchOvers, targetNRR) {
-  const team = pointsTable[yourTeam];
+function solveBowlingFirst(yourTeam, oppTeam, runsToChase, matchOvers, desiredPosition) {
+  const yourTeamData = pointsTable[yourTeam];
+  const oppTeamData = pointsTable[oppTeam];
   const runsToScore = runsToChase + 1; // Need to score 1 more to win
   
-  let left = 0.1; // Minimum 1 ball (0.1 decimal overs)
+  let left = 0.1; // Minimum 1 ball
   let right = matchOvers;
   let maxOversDecimal = -1;
   const precision = 0.01;
   
-  // Binary search for maximum overs (slowest chase that still beats target NRR)
+  // Binary search for maximum overs to achieve desired position
   while (right - left > precision) {
     const mid = (left + right) / 2;
-    const newNRR = calculateNewNRR(team, runsToScore, mid, runsToChase, matchOvers);
     
-    if (newNRR > targetNRR) {
+    // Calculate YOUR team's new NRR after chasing in 'mid' overs
+    const yourNewNRR = calculateNewNRR(yourTeamData, runsToScore, mid, runsToChase, matchOvers);
+    
+    // Calculate OPPONENT's new NRR after losing
+    const oppNewNRR = calculateNewNRR(oppTeamData, runsToChase, matchOvers, runsToScore, mid);
+    
+    // Check if you achieve desired position
+    const { achievedPosition } = calculateNewStandings(yourTeam, oppTeam, yourNewNRR, oppNewNRR);
+    
+    if (achievedPosition <= desiredPosition) {
       maxOversDecimal = mid;
       left = mid; // Try slower chase
     } else {
@@ -212,14 +230,18 @@ function solveBowlingFirst(yourTeam, runsToChase, matchOvers, targetNRR) {
   }
   
   if (maxOversDecimal === -1) {
-    console.log("\n⚠️ Impossible to achieve target NRR even with fastest chase!");
+    console.log("\n⚠️ Impossible to achieve desired position even with fastest chase!");
     return null;
   }
   
   // Calculate NRR range
   const minOversDecimal = 0.1;
-  const nrrMax = calculateNewNRR(team, runsToScore, minOversDecimal, runsToChase, matchOvers);
-  const nrrMin = calculateNewNRR(team, runsToScore, maxOversDecimal, runsToChase, matchOvers);
+  const nrrMax = calculateNewNRR(yourTeamData, runsToScore, minOversDecimal, runsToChase, matchOvers);
+  const nrrMin = calculateNewNRR(yourTeamData, runsToScore, maxOversDecimal, runsToChase, matchOvers);
+  
+  //  Calculate opponent's NRR range
+  const oppNRRWhenYouGetMax = calculateNewNRR(oppTeamData, runsToChase, matchOvers, runsToScore, minOversDecimal);
+  const oppNRRWhenYouGetMin = calculateNewNRR(oppTeamData, runsToChase, matchOvers, runsToScore, maxOversDecimal);
   
   return { 
     minOversDecimal, 
@@ -227,7 +249,9 @@ function solveBowlingFirst(yourTeam, runsToChase, matchOvers, targetNRR) {
     minOvers: decimalToOvers(minOversDecimal), 
     maxOvers: decimalToOvers(maxOversDecimal),
     nrrMin, 
-    nrrMax 
+    nrrMax,
+    oppNRRMax: oppNRRWhenYouGetMax,
+    oppNRRMin: oppNRRWhenYouGetMin
   };
 }
 
@@ -237,14 +261,7 @@ function solveBowlingFirst(yourTeam, runsToChase, matchOvers, targetNRR) {
 
 /**
  * Calculate NRR performance requirements for IPL match
- * @param {Object} params - Input parameters
- * @param {string} params.yourTeam - Your team name
- * @param {string} params.oppTeam - Opposition team name
- * @param {number} params.matchOvers - Total overs in match (usually 20)
- * @param {number} params.desiredPosition - Target position in points table (1-5)
- * @param {string} params.tossResult - "batting" or "bowling"
- * @param {number} params.runs - Runs scored (if batting) OR opponent's runs (if bowling)
- * @returns {Object|null} Result object with performance requirements and NRR range
+ * DYNAMIC NRR: Considers NRR changes for both teams
  */
 function calculateNRRRequirement(params) {
   const { yourTeam, oppTeam, matchOvers, desiredPosition, tossResult, runs } = params;
@@ -263,21 +280,47 @@ function calculateNRRRequirement(params) {
     throw new Error('matchOvers and runs must be positive numbers');
   }
 
-  // Get target NRR threshold
-  const targetNRR = getTargetNRRForPosition(yourTeam, desiredPosition);
-
-  console.log(`\n${"=".repeat(60)}`);
-  console.log(`Match: ${yourTeam} vs ${oppTeam}`);
+  // Display current standings
+  const teams = Object.entries(pointsTable)
+    .map(([name, data]) => ({ name, ...data }))
+    .sort((a, b) => b.points !== a.points ? b.points - a.points : b.nrr - a.nrr);
+  
+  console.log(`\n${"=".repeat(70)}`);
+  console.log(`CURRENT POINTS TABLE`);
+  console.log(`${"=".repeat(70)}`);
+  teams.forEach((team, idx) => {
+    console.log(`${idx + 1}. ${team.name.padEnd(30)} Pts: ${team.points}  NRR: ${team.nrr.toFixed(3)}`);
+  });
+  
+  console.log(`\n${"=".repeat(70)}`);
+  console.log(`MATCH SCENARIO`);
+  console.log(`${"=".repeat(70)}`);
+  console.log(`${yourTeam} vs ${oppTeam}`);
   console.log(`Toss: ${yourTeam} ${tossResult} first`);
   console.log(`Match Overs: ${matchOvers}`);
-  console.log(`${"=".repeat(60)}`);
+  console.log(`Target Position: ${desiredPosition}`);
+  console.log(`${"=".repeat(70)}`);
 
   if (tossResult.toLowerCase() === "batting") {
     // Batting first scenario
     console.log(`\n${yourTeam} bats first and scores ${runs} runs in ${matchOvers} overs`);
-    const result = solveBattingFirst(yourTeam, runs, matchOvers, targetNRR);
+    const result = solveBattingFirst(yourTeam, oppTeam, runs, matchOvers, desiredPosition);
     
     if (!result) return null;
+    
+    // Show final standings for both extreme cases
+    const maxNRRStandings = calculateNewStandings(yourTeam, oppTeam, result.nrrMax, result.oppNRRMax);
+    const minNRRStandings = calculateNewStandings(yourTeam, oppTeam, result.nrrMin, result.oppNRRMin);
+    
+    console.log(`\n${"=".repeat(70)}`);
+    console.log(`✓ RESULT - DYNAMIC NRR CALCULATION`);
+    console.log(`${"=".repeat(70)}`);
+    console.log(`Restrict ${oppTeam} to: ${result.restrictMin} - ${result.restrictMax} runs`);
+    console.log(`\n${yourTeam}'s NRR range: ${result.nrrMin.toFixed(3)} to ${result.nrrMax.toFixed(3)}`);
+    console.log(`${oppTeam}'s NRR range: ${result.oppNRRMin.toFixed(3)} to ${result.oppNRRMax.toFixed(3)}`);
+    console.log(`\nBest case: ${yourTeam} at position ${maxNRRStandings.achievedPosition}`);
+    console.log(`Worst case (to reach pos ${desiredPosition}): ${yourTeam} at position ${minNRRStandings.achievedPosition}`);
+    console.log(`${"=".repeat(70)}`);
     
     return {
       scenario: "batting_first",
@@ -289,6 +332,8 @@ function calculateNRRRequirement(params) {
       restrictMax: result.restrictMax,
       nrrMin: result.nrrMin,
       nrrMax: result.nrrMax,
+      oppNRRMin: result.oppNRRMin,
+      oppNRRMax: result.oppNRRMax,
       message: `If ${yourTeam} scores ${runs} runs in ${matchOvers} overs, ${yourTeam} needs to restrict ${oppTeam} between ${result.restrictMin} to ${result.restrictMax} runs in ${matchOvers} overs.`,
       nrrMessage: `Revised NRR of ${yourTeam} will be between ${result.nrrMin.toFixed(3)} to ${result.nrrMax.toFixed(3)}.`
     };
@@ -297,9 +342,23 @@ function calculateNRRRequirement(params) {
     const chaseTarget = runs + 1;
     console.log(`\n${oppTeam} bats first and scores ${runs} runs in ${matchOvers} overs`);
     console.log(`${yourTeam} needs to chase ${chaseTarget} runs to win`);
-    const result = solveBowlingFirst(yourTeam, runs, matchOvers, targetNRR);
+    const result = solveBowlingFirst(yourTeam, oppTeam, runs, matchOvers, desiredPosition);
     
     if (!result) return null;
+    
+    // Show final standings for both extreme cases
+    const maxNRRStandings = calculateNewStandings(yourTeam, oppTeam, result.nrrMax, result.oppNRRMax);
+    const minNRRStandings = calculateNewStandings(yourTeam, oppTeam, result.nrrMin, result.oppNRRMin);
+    
+    console.log(`\n${"=".repeat(70)}`);
+    console.log(`✓ RESULT - DYNAMIC NRR CALCULATION`);
+    console.log(`${"=".repeat(70)}`);
+    console.log(`Chase ${chaseTarget} runs in: ${result.minOvers.toFixed(1)} - ${result.maxOvers.toFixed(1)} overs`);
+    console.log(`\n${yourTeam}'s NRR range: ${result.nrrMin.toFixed(3)} to ${result.nrrMax.toFixed(3)}`);
+    console.log(`${oppTeam}'s NRR range: ${result.oppNRRMin.toFixed(3)} to ${result.oppNRRMax.toFixed(3)}`);
+    console.log(`\nBest case: ${yourTeam} at position ${maxNRRStandings.achievedPosition}`);
+    console.log(`Worst case (to reach pos ${desiredPosition}): ${yourTeam} at position ${minNRRStandings.achievedPosition}`);
+    console.log(`${"=".repeat(70)}`);
     
     return {
       scenario: "bowling_first",
@@ -313,6 +372,8 @@ function calculateNRRRequirement(params) {
       maxOversDecimal: result.maxOversDecimal,
       nrrMin: result.nrrMin,
       nrrMax: result.nrrMax,
+      oppNRRMin: result.oppNRRMin,
+      oppNRRMax: result.oppNRRMax,
       message: `${yourTeam} needs to chase ${chaseTarget} runs between ${result.minOvers.toFixed(1)} and ${result.maxOvers.toFixed(1)} overs.`,
       nrrMessage: `Revised NRR for ${yourTeam} will be between ${result.nrrMin.toFixed(3)} to ${result.nrrMax.toFixed(3)}.`
     };
@@ -324,11 +385,11 @@ function calculateNRRRequirement(params) {
 // ============================================
 
 console.log("====================================");
-console.log("IPL NRR CALCULATOR");
+console.log("IPL NRR CALCULATOR - DYNAMIC NRR");
 console.log("====================================");
 
 // Question 1a: RR vs DC - RR bats first, scores 120
-console.log("\n\n*** QUESTION 1a ***");
+console.log("\n\n*** QUESTION 1a: RR vs DC (RR bats first, scores 120) ***");
 const result1a = calculateNRRRequirement({
   yourTeam: "Rajasthan Royals",
   oppTeam: "Delhi Capitals",
@@ -337,13 +398,9 @@ const result1a = calculateNRRRequirement({
   tossResult: "batting",
   runs: 120
 });
-if (result1a) {
-  console.log(`\n✓ ${result1a.message}`);
-  console.log(`✓ ${result1a.nrrMessage}`);
-}
 
 // Question 1b: RR vs DC - DC bats first, scores 119
-console.log("\n\n*** QUESTION 1b ***");
+console.log("\n\n*** QUESTION 1b: RR vs DC (DC bats first, scores 119) ***");
 const result1b = calculateNRRRequirement({
   yourTeam: "Rajasthan Royals",
   oppTeam: "Delhi Capitals",
@@ -352,13 +409,9 @@ const result1b = calculateNRRRequirement({
   tossResult: "bowling",
   runs: 119
 });
-if (result1b) {
-  console.log(`\n✓ ${result1b.message}`);
-  console.log(`✓ ${result1b.nrrMessage}`);
-}
 
 // Question 2c: RR vs RCB - RR bats first, scores 80
-console.log("\n\n*** QUESTION 2c ***");
+console.log("\n\n*** QUESTION 2c: RR vs RCB (RR bats first, scores 80) ***");
 const result2c = calculateNRRRequirement({
   yourTeam: "Rajasthan Royals",
   oppTeam: "Royal Challengers Bangalore",
@@ -367,13 +420,9 @@ const result2c = calculateNRRRequirement({
   tossResult: "batting",
   runs: 80
 });
-if (result2c) {
-  console.log(`\n✓ ${result2c.message}`);
-  console.log(`✓ ${result2c.nrrMessage}`);
-}
 
 // Question 2d: RR vs RCB - RCB bats first, scores 79
-console.log("\n\n*** QUESTION 2d ***");
+console.log("\n\n*** QUESTION 2d: RR vs RCB (RCB bats first, scores 79) ***");
 const result2d = calculateNRRRequirement({
   yourTeam: "Rajasthan Royals",
   oppTeam: "Royal Challengers Bangalore",
@@ -382,10 +431,6 @@ const result2d = calculateNRRRequirement({
   tossResult: "bowling",
   runs: 79
 });
-if (result2d) {
-  console.log(`\n✓ ${result2d.message}`);
-  console.log(`✓ ${result2d.nrrMessage}`);
-}
 
 console.log("\n====================================");
 console.log("CALCULATION COMPLETE");
