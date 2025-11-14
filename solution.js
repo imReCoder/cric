@@ -72,6 +72,12 @@ function oversToDecimal(overs) {
 function decimalToOvers(decimal) {
   const completeOvers = Math.floor(decimal);
   const balls = Math.round((decimal - completeOvers) * 6);
+  
+  // Handle case where rounding gives us 6 balls (should be next over)
+  if (balls >= 6) {
+    return completeOvers + 1;
+  }
+  
   return completeOvers + (balls / 10);
 }
 
@@ -93,18 +99,24 @@ function calculateNRR(runsFor, oversFor, runsAgainst, oversAgainst) {
  * Calculate new NRR after a match
  * @param {Object} team - Team data from points table
  * @param {number} newRunsFor - Runs scored in new match
- * @param {number} newOversFor - Overs faced in new match
+ * @param {number} newOversFor - Overs faced in new match (DECIMAL format)
  * @param {number} newRunsAgainst - Runs conceded in new match
- * @param {number} newOversAgainst - Overs bowled in new match
+ * @param {number} newOversAgainst - Overs bowled in new match (DECIMAL format)
  * @returns {number} New NRR after the match
  */
 function calculateNewNRR(team, newRunsFor, newOversFor, newRunsAgainst, newOversAgainst) {
   const totalRunsFor = team.runsFor + newRunsFor;
-  const totalOversFor = oversToDecimal(team.oversFor) + oversToDecimal(newOversFor);
+  // team.oversFor is in cricket format (e.g., 128.2), convert it to decimal
+  // newOversFor is already in decimal format, don't convert again
+  const totalOversFor = oversToDecimal(team.oversFor) + newOversFor;
   const totalRunsAgainst = team.runsAgainst + newRunsAgainst;
-  const totalOversAgainst = oversToDecimal(team.oversAgainst) + oversToDecimal(newOversAgainst);
+  const totalOversAgainst = oversToDecimal(team.oversAgainst) + newOversAgainst;
   
-  return calculateNRR(totalRunsFor, totalOversFor, totalRunsAgainst, totalOversAgainst);
+  // Calculate NRR using decimal overs
+  const runRateFor = totalRunsFor / totalOversFor;
+  const runRateAgainst = totalRunsAgainst / totalOversAgainst;
+  
+  return runRateFor - runRateAgainst;
 }
 
 // ============================================
